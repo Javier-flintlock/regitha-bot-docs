@@ -64,7 +64,7 @@ On the [Knowledge Base](https://client.botika.online/docs/agentic-platform/knowl
 
 **1. Download the sample KB** — Use the dummy spreadsheet below, or prepare your own articles covering how Regitha works, supported categories, and financial-habit tips.
 
-📥 `KB Regitha.xlsx` *(dummy file included alongside this document — replace with your own bot's FAQ/help articles before going live)*
+📥 [KB Regitha.xlsx](./documents/regitha-kb.xlsx)
 
 **2. Import your knowledge base** — Click **+** → **Import Document** and upload `KB Regitha.xlsx` (or add entries manually). Cover topics such as: what Regitha is, how to record income/expenses, supported categories, slang/number formatting, how summaries and budget comparisons work, privacy, and supported languages.
 
@@ -90,7 +90,7 @@ Open the [Workflow](https://client.botika.online/docs/agentic-platform/workflow.
 
 **1. Copy the example workflow** — Select and copy all nodes from the widget below:
 
-![Workflow diagram](images/workflow-diagram-placeholder.png)
+![Workflow diagram](images/workflow.png)
 
 - Open your bot's **Workflow** editor in the Agentic platform.
 - Hold **Shift** and drag to select **Start**, **Set User Variable (name/balance)**, **Intent Classification (menu router)**, the flow branches, and **Send Response**.
