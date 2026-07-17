@@ -4,7 +4,51 @@
 
 Personal finance secretary for individual users, integrated with a **Google Spreadsheet** (Monthly Budget template: `Summary` + `Transactions` sheets). **Regitha** helps users record daily income and expenses, generates monthly summaries, compares planned vs. actual budgets, and gives realistic financial advice — all scoped per-user and synced live to their own spreadsheet.
 
-**Flow:** Persona → Knowledge Base → Workflow → Integration
+**Flow:** Spreadsheet → API Endpoint → Persona → Knowledge Base → Workflow → Integration
+
+---
+
+## Setup Your Spreadsheet
+
+Create a spreadsheet for our bot using available templates in Google Spreadsheet.
+
+**1. Open Google Spreadsheet in your browser** — You can visit it from this [link.](https://docs.google.com/)
+
+**2. Select Template** — Choose monthly budget template for our spreadsheet.
+
+<!-- ![Spreadsheet Template](images/monthly-budget.png) -->
+
+**3. Customize Template** — Adjust the template to suit your needs. In this case, we will modify the Summary and Transactions Sheet to specify IDR currency. The default currency is US dollar, you can change it by selecting the specific cell, then click Format → Number → Currency you want. After customizing, clear or set all amounts of money to zero, because we will use it as a parent template for our agent.
+
+![Spreadsheet Overview](images/spreadsheet-overview.png)
+
+---
+
+## Setup Your Google Cloud
+
+**1. Open Google Cloud Console** — Open Google Cloud Console in your browser via this [link.](https://console.cloud.google.com/)
+
+**2. Create Project** — Make a project for our API integration by clicking
+
+![Create Project](images/create-project.png)
+
+**3. APIs & Services** — After finished, select the project and then go to APIs and services page.
+
+**4. Create Credential** — Go to Credentials tab from sidebar panel on the left. And then click Create credentials button.
+
+---
+
+## Setup Your API
+
+**1. Open Vercel in your browser** — You can visit it from this [link.](https://vercel.com/)
+
+**2. Create project** — In Projects Panel, Click Add New button → Project → Select our API script repository → Import. Then we setup Environment Variables specify our requirements.
+
+| Variables         | Value                |
+| ----------------- | -------------------- |
+| GOOGLE_CREDS      | `adadad`       |
+| MY_API_TOKEN      | Previous node output |
+| SPREADSHEET_ID    | On                   |
 
 ---
 
@@ -154,3 +198,5 @@ Unmatched descriptions fall back to **Custom category 1** (expense) or **Custom 
 - [Knowledge Base](https://client.botika.online/docs/agentic-platform/knowledge-base.html)
 - [HTTP Request](https://client.botika.online/docs/agentic-platform/node/http-request.html) — used to sync entries to the Google Spreadsheet
 - [Education Virtual Avatar Example](https://client.botika.online/docs/agentic-platform/example/project/education.html) — reference structure this document follows
+
+---
