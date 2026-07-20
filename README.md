@@ -34,19 +34,1119 @@ Create a spreadsheet for our bot using available templates in Google Spreadsheet
 
 **3. APIs & Services** — After finished, select the project and then go to APIs and services page.
 
-**4. Create Credential** — Go to Credentials tab from sidebar panel on the left. And then click Create credentials button.
+**4. Create Service Account** — Go to Credentials tab from sidebar panel on the left, click Create credentials button → Service account. Fill the service account name, ID, description form before clicking Create and continue button.
+
+![Service Account](images/service-account.png)
+
+**5. Create OAuth Client ID** — In Credentials tab, click Create credentials button → OAuth Client ID. Select Web application, fill the name and then click Create button.
+
+**6. Create Service Account Key** — Still in Credentials tab, click your service account email → Keys → Add key button → Create new key. You will automatically download a json file, and wait until the process is complete.
+
+![Add key](images/add-key.png)
 
 ---
 
 ## Setup Your API
 
-**1. Open Vercel in your browser** — You can visit it from this [link.](https://vercel.com/)
+**1. Create Folder** — Make a folder and create files with names bellow in the folder.
 
-**2. Create project** — In Projects Panel, Click Add New button → Project → Select our API script repository → Import. Then we setup Environment Variables specify our requirements.
+`server.js`
+```
+const express = require("express");
+const { google } = require("googleapis");
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(express.json());
+
+// Google Auth
+const serviceAccountConfig = JSON.parse(process.env.GOOGLE_CREDS || "{}");
+const auth = new google.auth.GoogleAuth({
+  credentials: serviceAccountConfig,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
+const sheets = google.sheets({ version: "v4", auth });
+
+// Constants
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
+const PARENT_SUMMARY = "Summary";
+const PARENT_TRANSACTIONS = "Transactions";
+
+const VALID_EXPENSE_CATEGORIES = [
+  "Food",
+  "Gifts",
+  "Health/medical",
+  "Home",
+  "Transportation",
+  "Personal",
+  "Pets",
+  "Utilities",
+  "Travel",
+  "Debt",
+  "Other",
+  "Custom category 1",
+  "Custom category 2",
+  "Custom category 3",
+];
+
+const VALID_INCOME_CATEGORIES = [
+  "Savings",
+  "Paycheck",
+  "Bonus",
+  "Interest",
+  "Other",
+  "Custom category",
+];
+
+// Baris tempat tiap kategori berada di sheet Summary (tabel detail per
+// kategori, kolom Planned/Actual/Diff). Diambil langsung dari layout
+// template "Regitha Monthly budget".
+const EXPENSE_CATEGORY_ROWS = {
+  Food: 28,
+  Gifts: 29,
+  "Health/medical": 30,
+  Home: 31,
+  Transportation: 32,
+  Personal: 33,
+  Pets: 34,
+  Utilities: 35,
+  Travel: 36,
+  Debt: 37,
+  Other: 38,
+  "Custom category 1": 39,
+  "Custom category 2": 40,
+  "Custom category 3": 41,
+};
+
+const INCOME_CATEGORY_ROWS = {
+  Savings: 28,
+  Paycheck: 29,
+  Bonus: 30,
+  Interest: 31,
+  Other: 32,
+  "Custom category": 33,
+};
+
+const MONTH_NAMES_ID = [
+  "Januari",
+  "Februari",
+  "Maret",
+  "April",
+  "Mei",
+  "Juni",
+  "Juli",
+  "Agustus",
+  "September",
+  "Oktober",
+  "November",
+  "Desember",
+];
+
+// Auth Middleware
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+  if (!token || token !== process.env.MY_API_TOKEN) {
+    return res.status(403).json({
+      success: false,
+      error: "Akses ditolak. Token tidak valid.",
+    });
+  }
+  next();
+};
+
+app.use(authenticateToken);
+
+// ===== Helpers =====
+
+function isValidDate(dateStr) {
+  if (!dateStr) return false;
+  const regex = /^\d{2}\/\d{2}\/\d{4}$/;
+  if (!regex.test(dateStr)) return false;
+  const [d, m, y] = dateStr.split("/").map(Number);
+  const date = new Date(y, m - 1, d);
+  return (
+    date.getFullYear() === y &&
+    date.getMonth() === m - 1 &&
+    date.getDate() === d
+  );
+}
+
+function parseMoney(val) {
+  if (typeof val === "number") return val;
+  if (typeof val !== "string") return NaN;
+
+  const s = val
+    .toLowerCase()
+    .trim()
+    .replace(/^(rp|idr|usd)\.?\s*/i, "")
+    .replace(/\$/g, "")
+    .replace(/\./g, "")
+    .replace(/,/g, "");
+
+  if (/jt$|juta$/.test(s)) return parseFloat(s) * 1000000;
+  if (/rb$|ribu$/.test(s)) return parseFloat(s) * 1000;
+  if (/k$/.test(s)) return parseFloat(s) * 1000;
+
+  return parseFloat(s);
+}
+
+async function readRange(range) {
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range,
+  });
+  return response.data.values || [];
+}
+
+// ===== Helpers: Per-Bulan Sheet Resolver =====
+
+function getMonthYearLabel(date = new Date()) {
+  return `${MONTH_NAMES_ID[date.getMonth()]}-${date.getFullYear()}`;
+}
+
+// Baca month/year dari query (GET) atau body (POST/PUT). Kalau tidak ada,
+// pakai tanggal server sekarang. Return null kalau nilai yang dikirim invalid.
+function resolveTargetDate(source) {
+  const { month, year } = source || {};
+  if (month === undefined && year === undefined) return new Date();
+
+  const m = parseInt(month, 10);
+  const y = parseInt(year, 10);
+  if (isNaN(m) || m < 1 || m > 12 || isNaN(y)) return null;
+  return new Date(y, m - 1, 1);
+}
+
+async function getSpreadsheetMeta() {
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId: SPREADSHEET_ID,
+    fields: "sheets.properties",
+  });
+  return meta.data.sheets || [];
+}
+
+async function findSheetByTitle(title) {
+  const allSheets = await getSpreadsheetMeta();
+  return allSheets.find((s) => s.properties.title === title) || null;
+}
+
+// Pastikan sheet "ParentName (Label)" ada. Kalau SUDAH ADA (misal karena
+// bulan depan sudah disiapkan sebelumnya, atau bulan sekarang sudah
+// pernah dipakai), sheet itu DIPAKAI LANGSUNG -- tidak dibuat ulang dari 0.
+// Kalau belum ada, baru di-duplicate dari sheet template ("ParentName" polos).
+// fixReferenceTo (opsional) dipakai buat memperbaiki referensi formula
+// cross-sheet setelah duplicate (misal Summary -> Transactions bulan yang sama).
+async function ensureMonthlySheet(parentName, label, fixReferenceTo = null) {
+  const targetName = `${parentName} (${label})`;
+  const existing = await findSheetByTitle(targetName);
+  if (existing) {
+    return { name: targetName, sheetId: existing.properties.sheetId, created: false };
+  }
+
+  const allSheets = await getSpreadsheetMeta();
+  const parent = allSheets.find((s) => s.properties.title === parentName);
+  if (!parent) {
+    throw new Error(`Sheet template "${parentName}" tidak ditemukan.`);
+  }
+
+  const duplicateResponse = await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: SPREADSHEET_ID,
+    requestBody: {
+      requests: [
+        {
+          duplicateSheet: {
+            sourceSheetId: parent.properties.sheetId,
+            insertSheetIndex: parent.properties.index + 1,
+            newSheetName: targetName,
+          },
+        },
+      ],
+    },
+  });
+
+  const newSheetId =
+    duplicateResponse.data.replies[0].duplicateSheet.properties.sheetId;
+
+  if (fixReferenceTo) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        requests: [
+          {
+            findReplace: {
+              find: `${fixReferenceTo.from}!`,
+              replacement: `'${fixReferenceTo.to}'!`,
+              sheetId: newSheetId,
+              matchCase: true,
+              matchEntireCell: false,
+              searchByRegex: false,
+              includeFormulas: true,
+            },
+          },
+        ],
+      },
+    });
+  }
+
+  return { name: targetName, sheetId: newSheetId, created: true };
+}
+
+// Pastikan Transactions & Summary bulan tertentu sudah ada (buat kedua-duanya
+// sekaligus, dengan referensi formula Summary sudah dibetulkan). Dipakai
+// bareng oleh endpoint-endpoint yang menulis ke Summary (planned,
+// starting-balance) supaya konsisten.
+async function ensureMonthPair(label) {
+  const txSheet = await ensureMonthlySheet(PARENT_TRANSACTIONS, label);
+  const summarySheet = await ensureMonthlySheet(PARENT_SUMMARY, label, {
+    from: PARENT_TRANSACTIONS,
+    to: txSheet.name,
+  });
+  return { txSheet, summarySheet };
+}
+
+// ===== Routes =====
+
+// GET /health
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Regitha API is running",
+    spreadsheet_id: SPREADSHEET_ID ? "set" : "missing",
+    google_creds:
+      Object.keys(serviceAccountConfig).length > 0 ? "set" : "missing",
+  });
+});
+
+// GET /categories
+app.get("/categories", (req, res) => {
+  res.status(200).json({
+    success: true,
+    data: {
+      expense: VALID_EXPENSE_CATEGORIES,
+      income: VALID_INCOME_CATEGORIES,
+    },
+  });
+});
+
+// GET /transactions?month=&year=  (default: bulan berjalan)
+app.get("/transactions", async (req, res) => {
+  try {
+    const { type, category } = req.query;
+    const targetDate = resolveTargetDate(req.query);
+    if (!targetDate) {
+      return res.status(400).json({
+        success: false,
+        error: "month harus 1-12 dan year harus angka valid.",
+      });
+    }
+    const label = getMonthYearLabel(targetDate);
+    const sheetName = `${PARENT_TRANSACTIONS} (${label})`;
+
+    const existing = await findSheetByTitle(sheetName);
+    if (!existing) {
+      return res.status(200).json({
+        success: true,
+        month: label,
+        count: 0,
+        data: { expenses: [], incomes: [] },
+        note: `Belum ada data transaksi untuk periode ${label}.`,
+      });
+    }
+
+    const response = await sheets.spreadsheets.values.batchGet({
+      spreadsheetId: SPREADSHEET_ID,
+      ranges: [`${sheetName}!B5:E`, `${sheetName}!G5:J`],
+    });
+
+    const [expenseRange, incomeRange] = response.data.valueRanges || [];
+
+    const parseVal = (v) =>
+      parseFloat(
+        String(v || "0")
+          .replace(/^(rp|idr)\s*/i, "")
+          .replace(/\$/g, "")
+          .replace(/,/g, "")
+          .trim(),
+      ) || 0;
+
+    let expenses = (expenseRange.values || [])
+      .filter((row) => row.some((cell) => cell !== ""))
+      .map(([date, amount, description, cat]) => ({
+        type: "expense",
+        date: date || "",
+        amount: parseVal(amount),
+        description: description || "",
+        category: cat || "",
+      }));
+
+    let incomes = (incomeRange.values || [])
+      .filter((row) => row.some((cell) => cell !== ""))
+      .map(([date, amount, description, cat]) => ({
+        type: "income",
+        date: date || "",
+        amount: parseVal(amount),
+        description: description || "",
+        category: cat || "",
+      }));
+
+    if (type === "expense") incomes = [];
+    if (type === "income") expenses = [];
+
+    if (category) {
+      const cat = category.toLowerCase();
+      expenses = expenses.filter((e) => e.category.toLowerCase() === cat);
+      incomes = incomes.filter((i) => i.category.toLowerCase() === cat);
+    }
+
+    res.status(200).json({
+      success: true,
+      month: label,
+      count: expenses.length + incomes.length,
+      data: { expenses, incomes },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// POST /transactions/expense
+// Body: { date, amount, description, category, month?, year? }
+app.post("/transactions/expense", async (req, res) => {
+  try {
+    const { date, amount, description, category, month, year } = req.body;
+    const errors = [];
+
+    if (!date) {
+      errors.push("date wajib diisi (format: DD/MM/YYYY).");
+    } else if (!isValidDate(date)) {
+      errors.push(
+        'Format date salah: "' +
+          date +
+          '". Gunakan DD/MM/YYYY, contoh: 24/06/2026',
+      );
+    }
+
+    const parsedAmount = parseMoney(amount);
+    if (amount === undefined || amount === null || amount === "") {
+      errors.push("amount wajib diisi.");
+    } else if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      errors.push(
+        'amount tidak valid: "' +
+          amount +
+          '". Masukkan angka positif, contoh: 15000 atau 15rb',
+      );
+    }
+
+    if (!description || String(description).trim() === "") {
+      errors.push("description wajib diisi.");
+    }
+
+    if (!category) {
+      errors.push("category wajib diisi.");
+    } else if (!VALID_EXPENSE_CATEGORIES.includes(category)) {
+      errors.push(
+        'Category "' +
+          category +
+          '" tidak valid. Pilih salah satu: ' +
+          VALID_EXPENSE_CATEGORIES.join(", "),
+      );
+    }
+
+    const targetDate = resolveTargetDate({ month, year });
+    if (!targetDate) {
+      errors.push("month harus 1-12 dan year harus angka valid.");
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, errors });
+    }
+
+    const label = getMonthYearLabel(targetDate);
+    const { txSheet } = await ensureMonthPair(label);
+    const sheetName = txSheet.name;
+
+    const existingRows = await readRange(`${sheetName}!B5:B`);
+    const nextRow = existingRows.length + 5;
+    const targetRange = `${sheetName}!B${nextRow}:E${nextRow}`;
+
+    const response = await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: targetRange,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [[date, parsedAmount, String(description).trim(), category]],
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      message:
+        `Pengeluaran berhasil dicatat di ${sheetName}, baris ${nextRow}.` +
+        (txSheet.created ? " (Sheet bulan ini baru dibuat otomatis.)" : ""),
+      data: {
+        type: "expense",
+        month: label,
+        sheet_created: txSheet.created,
+        date,
+        amount: parsedAmount,
+        description: String(description).trim(),
+        category,
+        writtenTo: response.data.updatedRange,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// POST /transactions/income
+app.post("/transactions/income", async (req, res) => {
+  try {
+    const { date, amount, description, category, month, year } = req.body;
+    const errors = [];
+
+    if (!date) {
+      errors.push("date wajib diisi (format: DD/MM/YYYY).");
+    } else if (!isValidDate(date)) {
+      errors.push(
+        'Format date salah: "' +
+          date +
+          '". Gunakan DD/MM/YYYY, contoh: 24/06/2026',
+      );
+    }
+
+    const parsedAmount = parseMoney(amount);
+    if (amount === undefined || amount === null || amount === "") {
+      errors.push("amount wajib diisi.");
+    } else if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      errors.push(
+        'amount tidak valid: "' +
+          amount +
+          '". Masukkan angka positif, contoh: 5000000 atau 5jt',
+      );
+    }
+
+    if (!description || String(description).trim() === "") {
+      errors.push("description wajib diisi.");
+    }
+
+    if (!category) {
+      errors.push("category wajib diisi.");
+    } else if (!VALID_INCOME_CATEGORIES.includes(category)) {
+      errors.push(
+        'Category "' +
+          category +
+          '" tidak valid. Pilih salah satu: ' +
+          VALID_INCOME_CATEGORIES.join(", "),
+      );
+    }
+
+    const targetDate = resolveTargetDate({ month, year });
+    if (!targetDate) {
+      errors.push("month harus 1-12 dan year harus angka valid.");
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, errors });
+    }
+
+    const label = getMonthYearLabel(targetDate);
+    const { txSheet } = await ensureMonthPair(label);
+    const sheetName = txSheet.name;
+
+    const existingRows = await readRange(`${sheetName}!G5:G`);
+    const nextRow = existingRows.length + 5;
+    const targetRange = `${sheetName}!G${nextRow}:J${nextRow}`;
+
+    const response = await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: targetRange,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [[date, parsedAmount, String(description).trim(), category]],
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      message:
+        `Pemasukan berhasil dicatat di ${sheetName}, baris ${nextRow}.` +
+        (txSheet.created ? " (Sheet bulan ini baru dibuat otomatis.)" : ""),
+      data: {
+        type: "income",
+        month: label,
+        sheet_created: txSheet.created,
+        date,
+        amount: parsedAmount,
+        description: String(description).trim(),
+        category,
+        writtenTo: response.data.updatedRange,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// GET /summary?month=&year=  (default: bulan berjalan)
+app.get("/summary", async (req, res) => {
+  try {
+    const targetDate = resolveTargetDate(req.query);
+    if (!targetDate) {
+      return res.status(400).json({
+        success: false,
+        error: "month harus 1-12 dan year harus angka valid.",
+      });
+    }
+    const label = getMonthYearLabel(targetDate);
+    const sheetName = `${PARENT_SUMMARY} (${label})`;
+
+    const existing = await findSheetByTitle(sheetName);
+    if (!existing) {
+      return res.status(200).json({
+        success: true,
+        month: label,
+        exists: false,
+        note: `Belum ada Summary untuk periode ${label}.`,
+        data: null,
+      });
+    }
+
+    const response = await sheets.spreadsheets.values.batchGet({
+      spreadsheetId: SPREADSHEET_ID,
+      ranges: [
+        `${sheetName}!L8`,
+        `${sheetName}!E17`,
+        `${sheetName}!D26`,
+        `${sheetName}!E26`,
+        `${sheetName}!J26`,
+        `${sheetName}!K26`,
+        `${sheetName}!I15`,
+        `${sheetName}!I13`,
+      ],
+    });
+
+    const getValue = (idx) => {
+      const val = response.data.valueRanges?.[idx]?.values?.[0]?.[0] || "0";
+      return val
+        .replace(/^(rp|idr)\s*/i, "")
+        .replace(/[$,+%]/g, "")
+        .replace(/,/g, "")
+        .trim();
+    };
+
+    const startBalance = parseFloat(getValue(0)) || 0;
+    const endBalance = parseFloat(getValue(1)) || 0;
+    const expPlanned = parseFloat(getValue(2)) || 0;
+    const expActual = parseFloat(getValue(3)) || 0;
+    const incPlanned = parseFloat(getValue(4)) || 0;
+    const incActual = parseFloat(getValue(5)) || 0;
+    const savedThisMonth = parseFloat(getValue(6)) || 0;
+    const savingsPct = parseFloat(getValue(7)) || 0;
+
+    res.status(200).json({
+      success: true,
+      month: label,
+      exists: true,
+      data: {
+        balance: {
+          starting: startBalance,
+          ending: endBalance,
+          saved_this_month: savedThisMonth,
+          savings_increase_pct: savingsPct,
+        },
+        expenses: {
+          planned: expPlanned,
+          actual: expActual,
+          diff: expPlanned - expActual,
+          over_budget: expActual > expPlanned,
+        },
+        income: {
+          planned: incPlanned,
+          actual: incActual,
+          diff: incActual - incPlanned,
+          above_target: incActual >= incPlanned,
+        },
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// GET /summary/categories?month=&year=
+app.get("/summary/categories", async (req, res) => {
+  try {
+    const targetDate = resolveTargetDate(req.query);
+    if (!targetDate) {
+      return res.status(400).json({
+        success: false,
+        error: "month harus 1-12 dan year harus angka valid.",
+      });
+    }
+    const label = getMonthYearLabel(targetDate);
+    const sheetName = `${PARENT_SUMMARY} (${label})`;
+
+    const existing = await findSheetByTitle(sheetName);
+    if (!existing) {
+      return res.status(200).json({
+        success: true,
+        month: label,
+        exists: false,
+        data: { expense_categories: [], income_categories: [] },
+      });
+    }
+
+    const response = await sheets.spreadsheets.values.batchGet({
+      spreadsheetId: SPREADSHEET_ID,
+      ranges: [`${sheetName}!B28:F41`, `${sheetName}!H28:L33`],
+    });
+
+    const [expenseRows, incomeRows] = response.data.valueRanges || [];
+    const parseVal = (v) =>
+      parseFloat(
+        String(v || "0")
+          .replace(/^(rp|idr)\s*/i, "")
+          .replace(/\$/g, "")
+          .replace(/,/g, "")
+          .trim(),
+      ) || 0;
+
+    const expenseCategories = (expenseRows.values || [])
+      .map((row) => ({
+        category: row[0] || "",
+        planned: parseVal(row[2]),
+        actual: parseVal(row[3]),
+        diff: parseVal(row[4]),
+        over_budget: parseVal(row[3]) > parseVal(row[2]),
+      }))
+      .filter((c) => c.category !== "");
+
+    const incomeCategories = (incomeRows.values || [])
+      .map((row) => ({
+        category: row[0] || "",
+        planned: parseVal(row[2]),
+        actual: parseVal(row[3]),
+        diff: parseVal(row[4]),
+        above_target: parseVal(row[3]) >= parseVal(row[2]),
+      }))
+      .filter((c) => c.category !== "");
+
+    res.status(200).json({
+      success: true,
+      month: label,
+      exists: true,
+      data: {
+        expense_categories: expenseCategories,
+        income_categories: incomeCategories,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ===== Shared handlers (dipakai oleh PUT & POST, biar kompatibel dengan
+// Workflow yang cuma support GET/POST) =====
+
+async function handleSetStartingBalance(req, res) {
+  try {
+    const { amount, month, year } = req.body;
+    const parsed = parseMoney(amount);
+
+    if (amount === undefined || isNaN(parsed) || parsed < 0) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "amount tidak valid. Masukkan angka positif, contoh: 1000000 atau 1jt",
+      });
+    }
+
+    const targetDate = resolveTargetDate({ month, year });
+    if (!targetDate) {
+      return res.status(400).json({
+        success: false,
+        error: "month harus 1-12 dan year harus angka valid.",
+      });
+    }
+    const label = getMonthYearLabel(targetDate);
+    const { txSheet, summarySheet } = await ensureMonthPair(label);
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${summarySheet.name}!L8`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [[parsed]] },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Starting balance ${label} berhasil diset ke ${parsed}.`,
+      data: {
+        month: label,
+        starting_balance: parsed,
+        summary_sheet_created: summarySheet.created,
+        transactions_sheet_created: txSheet.created,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+// PUT /summary/starting-balance  (dipertahankan untuk kompatibilitas)
+app.put("/summary/starting-balance", handleSetStartingBalance);
+// POST /summary/starting-balance  (dipakai kalau Workflow tidak support PUT)
+// Body: { amount, month?, year? }
+app.post("/summary/starting-balance", handleSetStartingBalance);
+
+// POST /summary/planned
+// Body: { type: "expense" | "income", category, amount, month?, year? }
+// Mengubah nilai Planned untuk satu kategori tertentu. Kalau sheet bulan
+// yang dituju belum ada, dibuat otomatis (atau dipakai ulang kalau sudah ada).
+app.post("/summary/planned", async (req, res) => {
+  try {
+    const { type, category, amount, month, year } = req.body;
+    const errors = [];
+
+    if (!type || !["expense", "income"].includes(type)) {
+      errors.push('type wajib diisi, harus "expense" atau "income".');
+    }
+
+    const categoryRows =
+      type === "income" ? INCOME_CATEGORY_ROWS : EXPENSE_CATEGORY_ROWS;
+    const validCategoryList =
+      type === "income" ? VALID_INCOME_CATEGORIES : VALID_EXPENSE_CATEGORIES;
+
+    if (!category) {
+      errors.push("category wajib diisi.");
+    } else if (type && !categoryRows[category]) {
+      errors.push(
+        'Category "' +
+          category +
+          '" tidak valid untuk type "' +
+          type +
+          '". Pilih salah satu: ' +
+          validCategoryList.join(", "),
+      );
+    }
+
+    const parsedAmount = parseMoney(amount);
+    if (amount === undefined || amount === null || amount === "") {
+      errors.push("amount wajib diisi.");
+    } else if (isNaN(parsedAmount) || parsedAmount < 0) {
+      errors.push(
+        'amount tidak valid: "' +
+          amount +
+          '". Masukkan angka positif, contoh: 500000 atau 500rb',
+      );
+    }
+
+    const targetDate = resolveTargetDate({ month, year });
+    if (!targetDate) {
+      errors.push("month harus 1-12 dan year harus angka valid.");
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, errors });
+    }
+
+    const label = getMonthYearLabel(targetDate);
+    const { txSheet, summarySheet } = await ensureMonthPair(label);
+
+    const row = categoryRows[category];
+    const column = type === "income" ? "J" : "D";
+    const cell = `${summarySheet.name}!${column}${row}`;
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: cell,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [[parsedAmount]] },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Planned ${type} untuk kategori "${category}" bulan ${label} berhasil diset ke ${parsedAmount}.`,
+      data: {
+        month: label,
+        type,
+        category,
+        planned: parsedAmount,
+        cell,
+        summary_sheet_created: summarySheet.created,
+        transactions_sheet_created: txSheet.created,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ===== Shared handlers untuk hapus baris transaksi =====
+
+async function handleDeleteExpenseRow(row, monthSource, res) {
+  try {
+    if (isNaN(row) || row < 5) {
+      return res.status(400).json({
+        success: false,
+        error: "row tidak valid. Baris data dimulai dari 5.",
+      });
+    }
+
+    const targetDate = resolveTargetDate(monthSource);
+    if (!targetDate) {
+      return res.status(400).json({
+        success: false,
+        error: "month harus 1-12 dan year harus angka valid.",
+      });
+    }
+    const label = getMonthYearLabel(targetDate);
+    const sheetName = `${PARENT_TRANSACTIONS} (${label})`;
+
+    const existing = await findSheetByTitle(sheetName);
+    if (!existing) {
+      return res.status(400).json({
+        success: false,
+        error: `Sheet ${sheetName} belum ada, tidak ada data untuk dihapus.`,
+      });
+    }
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${sheetName}!B${row}:E${row}`,
+      valueInputOption: "RAW",
+      requestBody: { values: [["", "", "", ""]] },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Data expense di ${sheetName}, baris ${row} berhasil dihapus.`,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+async function handleDeleteIncomeRow(row, monthSource, res) {
+  try {
+    if (isNaN(row) || row < 5) {
+      return res.status(400).json({
+        success: false,
+        error: "row tidak valid. Baris data dimulai dari 5.",
+      });
+    }
+
+    const targetDate = resolveTargetDate(monthSource);
+    if (!targetDate) {
+      return res.status(400).json({
+        success: false,
+        error: "month harus 1-12 dan year harus angka valid.",
+      });
+    }
+    const label = getMonthYearLabel(targetDate);
+    const sheetName = `${PARENT_TRANSACTIONS} (${label})`;
+
+    const existing = await findSheetByTitle(sheetName);
+    if (!existing) {
+      return res.status(400).json({
+        success: false,
+        error: `Sheet ${sheetName} belum ada, tidak ada data untuk dihapus.`,
+      });
+    }
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${sheetName}!G${row}:J${row}`,
+      valueInputOption: "RAW",
+      requestBody: { values: [["", "", "", ""]] },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Data income di ${sheetName}, baris ${row} berhasil dihapus.`,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+// DELETE /transactions/expense/:row?month=&year=  (dipertahankan)
+app.delete("/transactions/expense/:row", async (req, res) => {
+  const row = parseInt(req.params.row);
+  await handleDeleteExpenseRow(row, req.query, res);
+});
+
+// POST /transactions/expense/delete  (dipakai kalau Workflow tidak support DELETE)
+// Body: { row, month?, year? }
+app.post("/transactions/expense/delete", async (req, res) => {
+  const row = parseInt(req.body.row);
+  await handleDeleteExpenseRow(row, req.body, res);
+});
+
+// DELETE /transactions/income/:row?month=&year=  (dipertahankan)
+app.delete("/transactions/income/:row", async (req, res) => {
+  const row = parseInt(req.params.row);
+  await handleDeleteIncomeRow(row, req.query, res);
+});
+
+// POST /transactions/income/delete  (dipakai kalau Workflow tidak support DELETE)
+// Body: { row, month?, year? }
+app.post("/transactions/income/delete", async (req, res) => {
+  const row = parseInt(req.body.row);
+  await handleDeleteIncomeRow(row, req.body, res);
+});
+
+// POST /admin/repair-formulas
+// Perbaikan sekali-jalan buat sheet Summary yang SUDAH TERLANJUR dibuat
+// sebelum bug kutip-nama-sheet ini diperbaiki. Cari semua sheet
+// "Summary (Label)", lalu perbaiki referensi ke "Transactions (Label)!"
+// yang tadinya tidak dibungkus kutip satu, jadi dibungkus kutip
+// ('Transactions (Label)'!) supaya formula valid lagi.
+app.post("/admin/repair-formulas", async (req, res) => {
+  try {
+    const allSheets = await getSpreadsheetMeta();
+    const pattern = /^Summary \((.+)\)$/;
+    const summarySheets = allSheets.filter((s) =>
+      pattern.test(s.properties.title),
+    );
+
+    const results = [];
+    for (const s of summarySheets) {
+      const match = s.properties.title.match(pattern);
+      const label = match[1];
+      const brokenRef = `${PARENT_TRANSACTIONS} (${label})!`;
+      const fixedRef = `'${PARENT_TRANSACTIONS} (${label})'!`;
+
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          requests: [
+            {
+              findReplace: {
+                find: brokenRef,
+                replacement: fixedRef,
+                sheetId: s.properties.sheetId,
+                matchCase: true,
+                matchEntireCell: false,
+                searchByRegex: false,
+                includeFormulas: true,
+              },
+            },
+          ],
+        },
+      });
+
+      results.push({ sheet: s.properties.title, label, repaired: true });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Selesai cek/perbaiki ${results.length} sheet Summary.`,
+      data: results,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// GET /months/list
+app.get("/months/list", async (req, res) => {
+  try {
+    const allSheets = await getSpreadsheetMeta();
+    const pattern = /^(Summary|Transactions) \((.+)\)$/;
+
+    const months = allSheets
+      .map((s) => s.properties.title)
+      .filter((title) => pattern.test(title))
+      .map((title) => {
+        const [, type, label] = title.match(pattern);
+        return { type, label, sheetName: title };
+      });
+
+    res.status(200).json({ success: true, count: months.length, data: months });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 404
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: "Endpoint " + req.method + " " + req.path + " tidak ditemukan.",
+    available_endpoints: [
+      "GET    /health",
+      "GET    /categories",
+      "GET    /transactions?month=&year=",
+      "GET    /transactions?type=expense|income",
+      "GET    /transactions?category=Food",
+      "POST   /transactions/expense",
+      "POST   /transactions/income",
+      "DELETE /transactions/expense/:row?month=&year=",
+      "POST   /transactions/expense/delete",
+      "DELETE /transactions/income/:row?month=&year=",
+      "POST   /transactions/income/delete",
+      "GET    /summary?month=&year=",
+      "GET    /summary/categories?month=&year=",
+      "PUT    /summary/starting-balance",
+      "POST   /summary/starting-balance",
+      "POST   /summary/planned",
+      "GET    /months/list",
+      "POST   /admin/repair-formulas",
+    ],
+  });
+});
+
+app.listen(PORT, () => {
+  console.log("Regitha API running on port " + PORT);
+});
+```
+
+`vercel.json`
+```
+{
+    "rewrites": [
+        { "source": "/(.*)", "destination": "/"}
+    ],
+    "version": 2,
+      "builds": [
+        { "src": "server.js", "use": "@vercel/node" }
+      ],
+      "routes": [
+        { "src": "/(.*)", "dest": "server.js" }
+      ]
+}
+```
+
+`package.json`
+```
+{
+  "name": "railway-sheets-api",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "googleapis": "^140.0.0"
+  }
+}
+```
+
+**2. Create Repository** — Create repository to put our files.
+
+**3. Upload Files** —
+
+**Open Vercel in your browser** — You can visit it from this [link.](https://vercel.com/)
+
+**Create project** — In Projects Panel, Click Add New button → Project → Select our API script repository → Import. Then we setup Environment Variables specify our requirements.
 
 | Variables         | Value                |
 | ----------------- | -------------------- |
-| GOOGLE_CREDS      | `adadad`       |
+| GOOGLE_CREDS      | `adadad`             |
 | MY_API_TOKEN      | Previous node output |
 | SPREADSHEET_ID    | On                   |
 
