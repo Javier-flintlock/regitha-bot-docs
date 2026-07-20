@@ -18,7 +18,9 @@ Create a spreadsheet for our bot using available templates in Google Spreadsheet
 
 <!-- ![Spreadsheet Template](images/monthly-budget.png) -->
 
-**3. Customize Template** — Adjust the template to suit your needs. In this case, we will modify the Summary and Transactions Sheet to specify IDR currency. The default currency is US dollar, you can change it by selecting the specific cell, then click Format → Number → Currency you want. After customizing, clear or set all amounts of money to zero, because we will use it as a parent template for our agent.
+**3. Customize Template** — Adjust the template to suit your needs. In this example, we modify the `Summary` and `Transactions` sheets to use IDR currency. The default currency is USD; to change it, select the relevant cells, then click **Format → Number → Currency**, and choose your currency.
+
+After customizing, **clear or reset every amount to zero.** These two sheets — `Summary` and `Transactions` — are not where daily data actually gets stored; the API treats them as a **parent template** only. Every month, the API automatically duplicates them into dated sheets (e.g. `Summary (July-2026)`, `Transactions (July-2026)`) where real transactions are recorded, and reuses the same dated sheet if it already exists for that month. Keeping the template at zero prevents old numbers from leaking into every new month it generates.
 
 ![Spreadsheet Overview](images/spreadsheet-overview.png)
 
@@ -28,21 +30,25 @@ Create a spreadsheet for our bot using available templates in Google Spreadsheet
 
 **1. Open Google Cloud Console** — Open Google Cloud Console in your browser via this [link.](https://console.cloud.google.com/)
 
-**2. Create Project** — Make a project for our API integration by clicking
+**2. Create Project** — Click the project dropdown at the top of the page, then **New Project**. Give it a name (e.g. `regitha-api`) and click **Create**.
 
-![Create Project](images/create-project.png)
+**3. Enable the Google Sheets API** — With your project selected, go to **APIs & Services → Library**, search for **Google Sheets API**, and click **Enable**. Without this step, the service account below won't be able to read from or write to your spreadsheet at all.
 
-**3. APIs & Services** — After finished, select the project and then go to APIs and services page.
-
-**4. Create Service Account** — Go to Credentials tab from sidebar panel on the left, click Create credentials button → Service account. Fill the service account name, ID, description form before clicking Create and continue button.
+**4. Create Service Account** — Go to the **Credentials** tab from the sidebar panel on the left, click **Create credentials** button → **Service account**. Fill the service account name, ID, description form before clicking **Create and continue** button.
 
 ![Service Account](images/service-account.png)
 
-**5. Create OAuth Client ID** — In Credentials tab, click Create credentials button → OAuth Client ID. Select Web application, fill the name and then click Create button.
+**5. Create OAuth Client ID** *(optional — see note)* — In Credentials tab, click **Create credentials** button → **OAuth Client ID**. Select Web application, fill the name and then click **Create** button.
 
-**6. Create Service Account Key** — Still in Credentials tab, click your service account email → Keys → Add key button → Create new key. You will automatically download a json file, and wait until the process is complete.
+> **Note:** the `server.js` in this guide authenticates purely as the service account (`GOOGLE_CREDS`) and never uses an OAuth Client ID. This step is only relevant if you plan to add a separate user-facing sign-in flow later — feel free to skip it for now.
+
+**6. Create Service Account Key** — Still in Credentials tab, click your service account email → **Keys** → **Add key** button → **Create new key**. You will automatically download a `.json` file — keep it safe, its full contents go into the `GOOGLE_CREDS` environment variable in the next section.
 
 ![Add key](images/add-key.png)
+
+**7. Share your spreadsheet with the service account** — Open the `.json` file you just downloaded and copy the `client_email` value (it looks like `something@your-project.iam.gserviceaccount.com`). Go back to the spreadsheet from the previous section, click **Share**, paste that email in, and grant it **Editor** access.
+
+> Without this step, every request to the API will fail with a permission error, even if everything else below is configured correctly — it's the single most common setup mistake.
 
 ---
 
@@ -1136,19 +1142,23 @@ app.listen(PORT, () => {
 }
 ```
 
+> **Note on the endpoints above:** most are meant to be called from your Workflow (see below). Two are **maintenance-only** and don't need a Workflow node at all — call them directly via Postman/curl whenever needed:
+> - `GET /months/list` — see which monthly sheets already exist.
+> - `POST /admin/repair-formulas` — one-time fix for an older bug where auto-generated sheet names weren't quoted correctly in formulas, causing a "formula parse error" inside `Summary (Label)` sheets. Run it once if you ever see that error; it's safe to run repeatedly.
+
 **2. Create Repository** — Create repository to put our files.
 
 **3. Upload Files** — Upload the files into repository.
 
 **4. Open Vercel in your browser** — You can visit it from this [link.](https://vercel.com/)
 
-**5. Create project** — In Projects Panel, Click Add New button → Project → Select our API script repository → Import. Then we setup Environment Variables specify these requirements.
+**5. Create project** — In the Projects panel, click **Add New → Project**, then select the repository you just created and click **Import**. Next, set up the environment variables below.
 
 | Variables         | Value                                 |
-| ----------------- | ------------------------------------- |
-| GOOGLE_CREDS      | Copy the script from json file        |
-| MY_API_TOKEN      | Generate manually by typing something |
-| SPREADSHEET_ID    | Your spreadsheet ID                   |
+| ----------------- | -------------------------------------- |
+| GOOGLE_CREDS      | Copy the full contents of the `.json` key file from step 6 above |
+| MY_API_TOKEN      | Any secret string you choose (e.g. a random 32-character string) — this secures your API, so keep it private |
+| SPREADSHEET_ID    | Your spreadsheet ID (the long string in its URL, between `/d/` and `/edit`) |
 
 **6. Deploy API** — After everything is set, click deploy button. Now we can use the API via website link of our project. Ex: `yourdomain.vercel.app`
 
@@ -1232,7 +1242,7 @@ You are not allowed to answer generic personal-finance, investment, or common-kn
 
 ## Setup Your Workflow
 
-Open the [Workflow](https://client.botika.online/docs/agentic-platform/workflow.html) page. This example uses a menu-driven flow: **Start** → **Onboarding (name & starting balance)** → **Intent Classification (main menu)** → per-flow branches → **HTTP Request (sync to Spreadsheet)** → **Send Response**.
+Open the [Workflow](https://client.botika.online/docs/agentic-platform/workflow.html) page. This example uses a menu-driven flow: **Start** → **Onboarding (name & starting balance)** → **Intent Classification (main menu)** → per-flow branches → **HTTP Request (call the Regitha API)** → **Send Response**.
 
 **1. Copy the example workflow** — Select and copy all nodes from the widget below:
 
@@ -1251,22 +1261,26 @@ Open the [Workflow](https://client.botika.online/docs/agentic-platform/workflow.
 | Start                    | Entry point of the conversation.                                                                  |
 | Set User Variable        | Save `full_name` and `starting_balance` on first contact; persist per user.                       |
 | Intent Classification    | Route to Record Income / Record Expense / Summary / Planned vs Actual / Advice / Set Budget.       |
-| Entity LLM                | Extract `tx_description`, `tx_amount`, `tx_date` from free-text user input.                        |
+| Entity LLM                | Extract `date`, `amount`, `description` from free-text user input.                        |
 | Code (Category Mapper)   | Map free-text description to a valid category using the auto-mapping rules.                        |
-| If Condition              | Budget check — warn if `actual_[category] + tx_amount > planned_[category]` before saving.         |
-| HTTP Request              | `POST` new rows to `Transactions!B:E` (expense) or `Transactions!G:J` (income); `GET` Summary data. |
+| If Condition              | Budget check — before saving, compare the new amount against the category's `planned`/`actual` from `GET /summary/categories`, and warn the user if it would push spending over budget. |
+| HTTP Request              | Calls the Regitha API (`POST`/`GET` only) to record transactions or read the summary.               |
 | Build Prompt / LLM        | Generate the warm, formatted confirmation/summary message from returned data.                      |
 | Send Response             | Deliver the final message and save the chatlog.                                                    |
 
+> **Note on Intent Classification:** this node requires training a model on `platform.botika.online` first (a `train_id`). If you'd rather skip that separate training step, an **Entity LLM** node can detect the intent and extract data in one call instead — this repo's companion workflow reference (`workflow-regitha.md`) has a fully worked example of that approach, including the Code node script and Switch routing rules.
+
 **3. Verify HTTP Request settings** — Open the node and confirm:
 
-| Setting        | Value                                                              |
-| --------------- | ------------------------------------------------------------------- |
-| Method           | `POST` (write) / `GET` (read)                                       |
-| Endpoint         | Your connected Google Spreadsheet API endpoint                      |
-| Range (write)    | `Transactions!B:E` (expense) or `Transactions!G:J` (income)         |
-| Range (read)     | `Summary!*`, `Transactions!B2:E`, `Transactions!G2:J`                |
-| Body fields      | `tx_date`, `tx_amount`, `tx_description`, `tx_category`             |
+| Setting             | Value                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------ |
+| Method                | `POST` (write) / `GET` (read) — the API only supports these two methods, so it's also used for updates and deletes |
+| Endpoint (examples)   | `{{api_base_url}}/transactions/expense`, `{{api_base_url}}/transactions/income`, `{{api_base_url}}/summary`, `{{api_base_url}}/summary/planned`, `{{api_base_url}}/summary/starting-balance` |
+| Headers               | `Authorization: Bearer {{api_token}}` |
+| Body fields (write)   | `date`, `amount`, `description`, `category`, plus optional `month` / `year` to target a period other than the current month |
+| Query params (read)   | `?month=` / `?year=` (optional, same default: current month if omitted) |
+
+> `{{api_base_url}}` here is **your own deployed API** from "Setup Your API" above (e.g. `https://yourdomain.vercel.app`) — not a direct Google Sheets API URL. See the `available_endpoints` list inside `server.js`'s 404 handler for the complete set of routes (record, delete, view summary, set planned budget, set starting balance).
 
 **4. Verify Send Response settings** — Open the node and confirm:
 
@@ -1298,7 +1312,7 @@ Unmatched descriptions fall back to **Custom category 1** (expense) or **Custom 
 
 - [Persona](https://client.botika.online/docs/agentic-platform/persona.html)
 - [Knowledge Base](https://client.botika.online/docs/agentic-platform/knowledge-base.html)
-- [HTTP Request](https://client.botika.online/docs/agentic-platform/node/http-request.html) — used to sync entries to the Google Spreadsheet
+- [HTTP Request](https://client.botika.online/docs/agentic-platform/node/http-request.html) — used to call the Regitha API, which in turn syncs to the Google Spreadsheet
 - [Education Virtual Avatar Example](https://client.botika.online/docs/agentic-platform/example/project/education.html) — reference structure this document follows
 
 ---
