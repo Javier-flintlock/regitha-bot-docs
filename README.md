@@ -1138,17 +1138,19 @@ app.listen(PORT, () => {
 
 **2. Create Repository** — Create repository to put our files.
 
-**3. Upload Files** —
+**3. Upload Files** — Upload the files into repository.
 
-**Open Vercel in your browser** — You can visit it from this [link.](https://vercel.com/)
+**4. Open Vercel in your browser** — You can visit it from this [link.](https://vercel.com/)
 
-**Create project** — In Projects Panel, Click Add New button → Project → Select our API script repository → Import. Then we setup Environment Variables specify our requirements.
+**5. Create project** — In Projects Panel, Click Add New button → Project → Select our API script repository → Import. Then we setup Environment Variables specify these requirements.
 
-| Variables         | Value                |
-| ----------------- | -------------------- |
-| GOOGLE_CREDS      | `adadad`             |
-| MY_API_TOKEN      | Previous node output |
-| SPREADSHEET_ID    | On                   |
+| Variables         | Value                                 |
+| ----------------- | ------------------------------------- |
+| GOOGLE_CREDS      | Copy the script from json file        |
+| MY_API_TOKEN      | Generate manually by typing something |
+| SPREADSHEET_ID    | Your spreadsheet ID                   |
+
+**6. Deploy API** — After everything is set, click deploy button. Now we can use the API via website link of our project. Ex: `yourdomain.vercel.app`
 
 ---
 
